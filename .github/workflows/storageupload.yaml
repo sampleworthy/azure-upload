@@ -36,6 +36,6 @@ jobs:
         if [ $? -eq 0 ]; then
           echo "Files uploaded successfully."
         else
-          echo "File upload failed."
+          echo "File uploads failed."
           exit 1
         fi
