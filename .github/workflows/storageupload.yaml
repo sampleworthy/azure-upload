@@ -1,0 +1,39 @@
+name: Upload Blobs to Azure Storage
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  upload-to-azure:
+    runs-on: ubuntu-latest
+    environment: azureupload
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Set up Azure CLI
+      uses: azure/CLI@v1
+      with:
+        azcliversion: 'latest'
+
+    - name: Login to Azure
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Upload files to Azure Storage
+      env:
+        AZURE_STORAGE_ACCOUNT: ${{ secrets.AZURE_STORAGE_ACCOUNT }}
+        AZURE_STORAGE_KEY: ${{ secrets.AZURE_STORAGE_KEY }}
+      run: |
+        echo "Uploading files from reference/schemas to Azure Storage account $AZURE_STORAGE_ACCOUNT"
+        az storage blob upload-batch -d '$web' -s reference/schemas --account-name $AZURE_STORAGE_ACCOUNT --account-key $AZURE_STORAGE_KEY
+        if [ $? -eq 0 ]; then
+          echo "Files uploaded successfully."
+        else
+          echo "File upload failed."
+          exit 1
+        fi
