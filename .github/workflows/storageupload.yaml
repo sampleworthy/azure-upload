@@ -19,15 +19,12 @@ jobs:
       with:
         azcliversion: 'latest'
         inlineScript: |
-          echo "Azure CLI setup complete."
+          echo "Azure CLI setup complete"
 
-          - name: Log in to Azure
-          uses: azure/login@v1
-          with:
-            client-id: ${{ secrets.AZURE_CLIENT_ID }}
-            tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-            subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-            client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+    - name: Log in to Azure
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
 
     - name: Upload files to Azure Storage
       env:
@@ -39,6 +36,6 @@ jobs:
         if [ $? -eq 0 ]; then
           echo "Files uploaded successfully."
         else
-          echo "File uploads failed."
+          echo "File upload failed."
           exit 1
         fi
