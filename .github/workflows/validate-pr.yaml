@@ -1,0 +1,102 @@
+name: Validate API Specs
+
+on:
+  pull_request:
+    paths:
+      - 'apis/**'
+
+jobs:
+  validate-pr:
+    runs-on: ubuntu-latest
+    name: Validate API Specifications
+    
+    steps:
+      - uses: actions/checkout@v2
+      
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.8'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyyaml
+          npm install -g @stoplight/spectral-cli
+      
+      - name: Find changed API specs
+        id: changed-files
+        uses: tj-actions/changed-files@v14
+        with:
+          files: |
+            apis/**/*.yaml
+            apis/**/*.yml
+            apis/**/*.json
+      
+      - name: Create validator script
+        run: |
+          # Copy the validator script content from repository
+          cp api-validator.py validator.py
+          chmod +x validator.py
+      
+      - name: Run validation on changed files
+        if: steps.changed-files.outputs.any_changed == 'true'
+        run: |
+          FAILED=false
+          
+          for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
+            echo "Validating $file"
+            python validator.py "$file"
+            
+            if [ $? -ne 0 ]; then
+              FAILED=true
+              echo "::error::Validation failed for $file"
+            fi
+          done
+          
+          if [ "$FAILED" = true ]; then
+            echo "::error::One or more API specs failed validation. Please fix issues before merging."
+            exit 1
+          fi
+      
+      - name: Comment on PR with validation results
+        uses: actions/github-script@v5
+        if: always()
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            
+            try {
+              // Check if validation log exists
+              if (fs.existsSync('./validation-results.log')) {
+                const content = fs.readFileSync('./validation-results.log', 'utf8');
+                const lines = content.split('\n').filter(line => line.trim());
+                
+                // Determine if there are errors
+                const hasErrors = lines.some(line => line.includes('❌') || line.includes('error'));
+                
+                // Create markdown for comment
+                let body = '## API Specification Validation\n\n';
+                
+                if (hasErrors) {
+                  body += '⚠️ **Validation failed!** Please fix the issues before merging.\n\n';
+                } else {
+                  body += '✅ **Validation passed!** Your API specs are good to go.\n\n';
+                }
+                
+                body += '```\n' + content + '\n```\n\n';
+                
+                // Add the comment to the PR
+                github.rest.issues.createComment({
+                  issue_number: context.issue.number,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  body: body
+                });
+              } else {
+                console.log('No validation results file found.');
+              }
+            } catch (error) {
+              console.error('Error creating PR comment:', error);
+            }

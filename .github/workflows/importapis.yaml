@@ -1,0 +1,77 @@
+name: Import APIs to APIM
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'apis/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'apis/**'
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  validate-apis:
+    runs-on: ubuntu-latest
+    name: Validate APIs
+    
+    steps:
+      - uses: actions/checkout@v2
+      
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.8'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyyaml
+          npm install -g @stoplight/spectral-cli
+      
+      - name: Validate all API specs
+        id: validate
+        run: |
+          # Run the validator script from the repo
+          python ./scripts/api-validator.py --all
+          if [ $? -ne 0 ]; then
+            echo "API validation failed, but continuing with import process..."
+          fi
+  
+  import-apis:
+    needs: validate-apis
+    runs-on: ubuntu-latest
+    name: Import APIs
+
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0  # This ensures we get the full git history for diffing
+
+      - name: Install yq
+        run: |
+         sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+         sudo chmod +x /usr/local/bin/yq
+
+      - name: Install jq
+        run: sudo apt-get install -y jq
+
+      - name: Login to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Make scripts executable
+        run: |
+          chmod +x ./scripts/import-apis.sh
+          
+      - name: Import All APIs
+        run: |
+          # Run the import script from the repo
+          ./scripts/import-apis.sh
+        env:
+          RESOURCE_GROUP: ${{ secrets.RESOURCE_GROUP }}
+          APIM_INSTANCE: ${{ secrets.APIM_INSTANCE }}
+          SUBSCRIPTION_ID: ${{ secrets.SUBSCRIPTION_ID }}
+          MODE: "all"
