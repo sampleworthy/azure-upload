@@ -63,16 +63,35 @@ def create_version_set(api_path):
     """Create API version set."""
     logger.info(f"Creating version set for {api_path}...")
     
-    # Use a single line command with hardcoded version header name X-API-VERSION to match api_create_or_update.py
-    cmd = f'az apim api versionset create --resource-group "{RESOURCE_GROUP}" --service-name "{APIM_INSTANCE}" --version-set-id "{api_path}" --display-name "{api_path}" --versioning-scheme "header" --version-header-name "X-API-VERSION"'
+    # Try a different way of formatting the command
+    # Use the array form of subprocess to avoid shell quoting issues
+    args = [
+        "az", "apim", "api", "versionset", "create",
+        "--resource-group", RESOURCE_GROUP,
+        "--service-name", APIM_INSTANCE,
+        "--version-set-id", api_path,
+        "--display-name", api_path,
+        "--versioning-scheme", "header",
+        "--version-header-name", "X-API-VERSION"
+    ]
     
-    result = run_command(cmd)
-    
-    if result.returncode == 0:
-        logger.info(f"Successfully created version set for {api_path}")
-        return True
-    else:
-        logger.error(f"Failed to create version set for {api_path}: {result.stderr}")
+    try:
+        logger.info(f"Running command: {' '.join(args)}")
+        result = subprocess.run(
+            args,
+            check=False,
+            text=True,
+            capture_output=True
+        )
+        
+        if result.returncode == 0:
+            logger.info(f"Successfully created version set for {api_path}")
+            return True
+        else:
+            logger.error(f"Failed to create version set for {api_path}: {result.stderr}")
+            return False
+    except Exception as e:
+        logger.error(f"Exception creating version set: {e}")
         return False
 
 
