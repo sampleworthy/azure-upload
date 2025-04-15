@@ -6,10 +6,12 @@ import tempfile
 import subprocess
 import time
 import yaml
-import requests
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 import logging
+from azure.identity import DefaultAzureCredential
+from azure.mgmt.apimanagement import ApiManagementClient
+from azure.core.exceptions import HttpResponseError
 
 # Configure logging
 logging.basicConfig(
@@ -27,9 +29,6 @@ MAX_RETRIES = 3
 
 # Check if we need to run for all APIs or just changed APIs
 MODE = os.environ.get("MODE", "all")  # Default to 'all' if not specified
-
-# Azure API version
-AZURE_API_VERSION = "2021-08-01"
 
 
 def run_command(cmd, capture_output=True):
@@ -49,107 +48,56 @@ def run_command(cmd, capture_output=True):
         raise
 
 
-def get_access_token():
-    """Get Azure access token using CLI."""
-    cmd = "az account get-access-token --resource=https://management.azure.com/ --query accessToken -o tsv"
-    result = run_command(cmd)
-    if result.returncode == 0:
-        return result.stdout.strip()
-    else:
-        logger.error(f"Failed to get access token: {result.stderr}")
-        sys.exit(1)
+def get_apim_client():
+    """Get an Azure API Management client."""
+    credential = DefaultAzureCredential()
+    client = ApiManagementClient(credential, SUBSCRIPTION_ID)
+    return client
 
 
-def check_version_set(api_path):
-    """Check if version set exists."""
+def check_version_set(api_path, client):
+    """Check if version set exists using Azure SDK."""
     logger.info(f"Checking if version set exists for {api_path}...")
-    cmd = (
-        f"az apim api versionset show "
-        f"--resource-group \"{RESOURCE_GROUP}\" "
-        f"--service-name \"{APIM_INSTANCE}\" "
-        f"--version-set-id \"{api_path}\" "
-        f"--output none"
-    )
-    result = run_command(cmd)
-    return result.returncode == 0
+    try:
+        version_set = client.api_version_set.get(
+            resource_group_name=RESOURCE_GROUP,
+            service_name=APIM_INSTANCE,
+            version_set_id=api_path
+        )
+        logger.info(f"Version set {api_path} exists")
+        return True
+    except HttpResponseError as e:
+        if e.status_code == 404:
+            logger.info(f"Version set {api_path} does not exist")
+            return False
+        else:
+            logger.error(f"Error checking version set {api_path}: {str(e)}")
+            raise
 
 
-def create_version_set(api_path):
-    """Create API version set using direct REST API call."""
-    logger.info(f"Creating version set for {api_path} using REST API...")
-    
-    # Get access token
-    token = get_access_token()
-    
-    # Create version set using REST API
-    url = f"https://management.azure.com/subscriptions/{SUBSCRIPTION_ID}/resourceGroups/{RESOURCE_GROUP}/providers/Microsoft.ApiManagement/service/{APIM_INSTANCE}/apiVersionSets/{api_path}?api-version={AZURE_API_VERSION}"
-    
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-    
-    data = {
-        "properties": {
-            "displayName": api_path,
-            "versioningScheme": "Header",
-            "versionHeaderName": "X-API-VERSION"
-        }
-    }
-    
-    response = requests.put(url, headers=headers, json=data)
-    
-    if response.status_code in (200, 201):
+def create_version_set(api_path, client):
+    """Create API version set using Azure SDK."""
+    logger.info(f"Creating version set for {api_path}...")
+    try:
+        version_set = client.api_version_set.create_or_update(
+            resource_group_name=RESOURCE_GROUP,
+            service_name=APIM_INSTANCE,
+            version_set_id=api_path,
+            parameters={
+                "display_name": api_path,
+                "versioning_scheme": "Header",
+                "version_header_name": "X-API-VERSION"
+            }
+        )
         logger.info(f"Successfully created version set for {api_path}")
         return True
-    else:
-        logger.error(f"Failed to create version set for {api_path}: {response.text}")
+    except Exception as e:
+        logger.error(f"Failed to create version set for {api_path}: {str(e)}")
         return False
 
 
-def update_api_version_info(api_id, api_version, version_set_id):
-    """Update API version information using direct REST API call."""
-    logger.info(f"Updating version info for {api_id} using REST API...")
-    
-    # Get access token
-    token = get_access_token()
-    
-    # Get current API details first
-    url = f"https://management.azure.com/subscriptions/{SUBSCRIPTION_ID}/resourceGroups/{RESOURCE_GROUP}/providers/Microsoft.ApiManagement/service/{APIM_INSTANCE}/apis/{api_id}?api-version={AZURE_API_VERSION}"
-    
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-    
-    # First get the current API to avoid overwriting existing settings
-    get_response = requests.get(url, headers=headers)
-    
-    if get_response.status_code != 200:
-        logger.error(f"Failed to get API details for {api_id}: {get_response.text}")
-        return False
-    
-    # Extract current properties
-    current_api = get_response.json()
-    
-    # Update with version info
-    update_data = current_api
-    update_data['properties']['apiVersion'] = api_version
-    update_data['properties']['apiVersionSetId'] = version_set_id
-    
-    # Update the API
-    update_response = requests.put(url, headers=headers, json=update_data)
-    
-    if update_response.status_code in (200, 201):
-        logger.info(f"Successfully updated version info for {api_id}")
-        return True
-    else:
-        logger.error(f"Failed to update version info for {api_id}: {update_response.text}")
-        return False
-
-
-def import_api(api_id, api_version, api_path, version_set_id, spec_path, result_file):
-    """Import API with version set."""
+def import_api(api_id, api_version, api_path, version_set_id, spec_path, client, result_file):
+    """Import API with version set using Azure CLI and update with SDK."""
     logger.info(f"Importing API {api_id} with version {api_version}...")
     
     # Try import with retry logic
@@ -159,7 +107,7 @@ def import_api(api_id, api_version, api_path, version_set_id, spec_path, result_
     while retry_count < MAX_RETRIES and not success:
         logger.info(f"Attempt {retry_count + 1} of {MAX_RETRIES}")
         
-        # Use az apim api import command
+        # Use az apim api import command (CLI is still best for import)
         import_cmd = (
             f"az apim api import "
             f"--resource-group \"{RESOURCE_GROUP}\" "
@@ -178,11 +126,38 @@ def import_api(api_id, api_version, api_path, version_set_id, spec_path, result_
             success = True
             logger.info(f"Successfully imported {api_id}")
             
-            # Set API version and version set using REST API
-            if update_api_version_info(api_id, api_version, version_set_id):
+            # Update API with version info using SDK
+            try:
+                # Get current API
+                current_api = client.api.get(
+                    resource_group_name=RESOURCE_GROUP,
+                    service_name=APIM_INSTANCE,
+                    api_id=api_id
+                )
+                
+                # Prepare update parameters
+                update_params = {
+                    "api_version": api_version,
+                    "api_version_set_id": version_set_id,
+                    "display_name": current_api.display_name,
+                    "service_url": current_api.service_url,
+                    "path": current_api.path,
+                    "protocols": current_api.protocols
+                }
+                
+                # Update API
+                client.api.update(
+                    resource_group_name=RESOURCE_GROUP,
+                    service_name=APIM_INSTANCE,
+                    api_id=api_id,
+                    parameters=update_params
+                )
+                
+                logger.info(f"Successfully updated version info for {api_id}")
                 with open(result_file, 'a') as f:
                     f.write(json.dumps({api_id: 200}) + "\n")
-            else:
+            except Exception as e:
+                logger.error(f"Failed to update version info for {api_id}: {str(e)}")
                 with open(result_file, 'a') as f:
                     f.write(json.dumps({api_id: 500}) + "\n")
         else:
@@ -196,7 +171,7 @@ def import_api(api_id, api_version, api_path, version_set_id, spec_path, result_
                     f.write(json.dumps({api_id: 400}) + "\n")
 
 
-def process_api_file(file, result_file):
+def process_api_file(file, client, result_file):
     """Process a single API file."""
     # Extract file name without path and extension
     filename = os.path.basename(file)
@@ -207,9 +182,7 @@ def process_api_file(file, result_file):
         with open(file, 'r') as f:
             api_spec = yaml.safe_load(f)
         
-        service_url = api_spec.get('servers', [{}])[0].get('url', '')
         version_id = api_spec.get('info', {}).get('version', '1.0')
-        display_name = f"{base_name}-{version_id}"
         
         # Get API name from the file name or directory structure
         api_name = base_name
@@ -220,18 +193,18 @@ def process_api_file(file, result_file):
         logger.info(f"Processing API: {api_name} (version {version_id})")
         
         # Check and create version set if needed
-        if not check_version_set(api_path):
-            if not create_version_set(api_path):
+        if not check_version_set(api_path, client):
+            if not create_version_set(api_path, client):
                 logger.error(f"Failed to create version set for {api_path}, skipping API import")
                 with open(result_file, 'a') as f:
                     f.write(json.dumps({api_id: 500}) + "\n")
                 return
         
         # Import API
-        import_api(api_id, version_id, api_path, version_set_id, file, result_file)
+        import_api(api_id, version_id, api_path, version_set_id, file, client, result_file)
         
     except Exception as e:
-        logger.error(f"Error processing API file {file}: {e}")
+        logger.error(f"Error processing API file {file}: {str(e)}")
         with open(result_file, 'a') as f:
             f.write(json.dumps({base_name: 500}) + "\n")
 
@@ -241,6 +214,9 @@ def main():
     # Create temp directory for results
     temp_dir = tempfile.mkdtemp()
     result_file = os.path.join(temp_dir, "results.json")
+    
+    # Get API Management client
+    client = get_apim_client()
     
     # Find API files
     if MODE == "all":
@@ -266,14 +242,14 @@ def main():
         futures = []
         for file in api_files:
             if os.path.isfile(file):
-                futures.append(executor.submit(process_api_file, file, result_file))
+                futures.append(executor.submit(process_api_file, file, client, result_file))
         
         # Wait for all tasks to complete
         for future in futures:
             try:
                 future.result()
             except Exception as e:
-                logger.error(f"Error in worker thread: {e}")
+                logger.error(f"Error in worker thread: {str(e)}")
     
     logger.info("All API imports have completed.")
     logger.info(f"Results saved to: {result_file}")
