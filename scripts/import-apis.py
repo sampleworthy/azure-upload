@@ -50,9 +50,9 @@ def check_version_set(api_path):
     logger.info(f"Checking if version set exists for {api_path}...")
     cmd = (
         f"az apim api versionset show "
-        f"--resource-group {RESOURCE_GROUP} "
-        f"--service-name {APIM_INSTANCE} "
-        f"--version-set-id {api_path} "
+        f"--resource-group \"{RESOURCE_GROUP}\" "
+        f"--service-name \"{APIM_INSTANCE}\" "
+        f"--version-set-id \"{api_path}\" "
         f"--output none"
     )
     result = run_command(cmd)
@@ -62,15 +62,10 @@ def check_version_set(api_path):
 def create_version_set(api_path):
     """Create API version set."""
     logger.info(f"Creating version set for {api_path}...")
-    cmd = (
-        f"az apim api versionset create "
-        f"--resource-group {RESOURCE_GROUP} "
-        f"--service-name {APIM_INSTANCE} "
-        f"--version-set-id {api_path} "
-        f"--display-name {api_path} "
-        f"--versioning-scheme header "
-        f"--version-header-name X-API-VERSION"
-    )
+    
+    # Use a single line command with hardcoded version header name X-API-VERSION to match api_create_or_update.py
+    cmd = f'az apim api versionset create --resource-group "{RESOURCE_GROUP}" --service-name "{APIM_INSTANCE}" --version-set-id "{api_path}" --display-name "{api_path}" --versioning-scheme "header" --version-header-name "X-API-VERSION"'
+    
     result = run_command(cmd)
     
     if result.returncode == 0:
@@ -95,11 +90,11 @@ def import_api(api_id, api_version, api_path, version_set_id, spec_path, result_
         # Use az apim api import command
         import_cmd = (
             f"az apim api import "
-            f"--resource-group {RESOURCE_GROUP} "
-            f"--service-name {APIM_INSTANCE} "
-            f"--path {api_path} "
-            f"--api-id {api_id} "
-            f"--specification-path {spec_path} "
+            f"--resource-group \"{RESOURCE_GROUP}\" "
+            f"--service-name \"{APIM_INSTANCE}\" "
+            f"--path \"{api_path}\" "
+            f"--api-id \"{api_id}\" "
+            f"--specification-path \"{spec_path}\" "
             f"--specification-format OpenApi "
             f"--api-type http "
             f"--protocols https"
@@ -114,11 +109,11 @@ def import_api(api_id, api_version, api_path, version_set_id, spec_path, result_
             # Set API version and version set
             update_cmd = (
                 f"az apim api update "
-                f"--resource-group {RESOURCE_GROUP} "
-                f"--service-name {APIM_INSTANCE} "
-                f"--api-id {api_id} "
-                f"--api-version {api_version} "
-                f"--api-version-set-id {version_set_id}"
+                f"--resource-group \"{RESOURCE_GROUP}\" "
+                f"--service-name \"{APIM_INSTANCE}\" "
+                f"--api-id \"{api_id}\" "
+                f"--api-version \"{api_version}\" "
+                f"--api-version-set-id \"{version_set_id}\""
             )
             
             update_result = run_command(update_cmd)
@@ -209,9 +204,17 @@ def main():
     logger.info(f"Processing {len(api_files)} API imports (concurrency: {MAX_CONCURRENT})...")
     
     with ThreadPoolExecutor(max_workers=MAX_CONCURRENT) as executor:
+        futures = []
         for file in api_files:
             if os.path.isfile(file):
-                executor.submit(process_api_file, file, result_file)
+                futures.append(executor.submit(process_api_file, file, result_file))
+        
+        # Wait for all tasks to complete
+        for future in futures:
+            try:
+                future.result()
+            except Exception as e:
+                logger.error(f"Error in worker thread: {e}")
     
     logger.info("All API imports have completed.")
     logger.info(f"Results saved to: {result_file}")
@@ -219,12 +222,16 @@ def main():
     # Display summary of results
     logger.info("Summary of import results:")
     try:
+        results = {}
         with open(result_file, 'r') as f:
-            results = [json.loads(line) for line in f]
-        combined_results = {}
-        for result_dict in results:
-            combined_results.update(result_dict)
-        print(json.dumps(combined_results, indent=2))
+            for line in f:
+                try:
+                    result_dict = json.loads(line)
+                    results.update(result_dict)
+                except json.JSONDecodeError:
+                    pass
+        
+        print(json.dumps(results, indent=2))
     except Exception as e:
         logger.error(f"Error reading results: {e}")
         print("No results recorded.")
