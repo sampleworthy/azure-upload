@@ -40,7 +40,7 @@ create_version_set() {
     --display-name "$api_path" \
     --versioning-scheme header \
     --version-header-name "X-API-VERSION"
-    
+  
   if [ $? -eq 0 ]; then
     echo "Successfully created version set for $api_path"
     return 0
