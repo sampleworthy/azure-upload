@@ -9,13 +9,12 @@ on:
     branches: [ main ]
     paths:
       - 'apis/**'
-  workflow_dispatch:  # Allow manual triggering
+  workflow_dispatch: # Allow manual triggering
 
 jobs:
   validate-apis:
     runs-on: ubuntu-latest
     name: Validate APIs
-    
     steps:
       - uses: actions/checkout@v2
       
@@ -23,13 +22,13 @@ jobs:
         uses: actions/setup-python@v2
         with:
           python-version: '3.8'
-      
+          
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install pyyaml
           npm install -g @stoplight/spectral-cli
-      
+          
       - name: Validate all API specs
         id: validate
         run: |
@@ -38,38 +37,40 @@ jobs:
           if [ $? -ne 0 ]; then
             echo "API validation failed, but continuing with import process..."
           fi
-  
+
   import-apis:
     needs: validate-apis
     runs-on: ubuntu-latest
     name: Import APIs
-
     steps:
       - uses: actions/checkout@v2
         with:
-          fetch-depth: 0  # This ensures we get the full git history for diffing
-
-      - name: Install yq
+          fetch-depth: 0 # This ensures we get the full git history for diffing
+          
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.8'
+          
+      - name: Install dependencies
         run: |
-         sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-         sudo chmod +x /usr/local/bin/yq
-
-      - name: Install jq
-        run: sudo apt-get install -y jq
-
+          python -m pip install --upgrade pip
+          pip install pyyaml
+          sudo apt-get install -y jq
+          
       - name: Login to Azure
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDS }}
-
+          
       - name: Make scripts executable
         run: |
-          chmod +x ./scripts/import-apis.sh
+          chmod +x ./scripts/import-apis.py
           
       - name: Import All APIs
         run: |
           # Run the import script from the repo
-          ./scripts/import-apis.sh
+          python ./scripts/import-apis.py
         env:
           RESOURCE_GROUP: ${{ secrets.RESOURCE_GROUP }}
           APIM_INSTANCE: ${{ secrets.APIM_INSTANCE }}
