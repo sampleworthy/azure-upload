@@ -55,7 +55,7 @@ jobs:
       - name: Install dependencies
         run: |
          python -m pip install --upgrade pip
-         pip install pyyaml azure-identity azure-mgmt-apimanagement azure-core
+         pip install pyyaml requests
           
       - name: Login to Azure
         uses: azure/login@v1
