@@ -15,7 +15,6 @@ jobs:
   validate-apis:
     runs-on: ubuntu-latest
     name: Validate APIs
-    environment: azureupload
     
     steps:
       - uses: actions/checkout@v2
