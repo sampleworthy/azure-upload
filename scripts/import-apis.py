@@ -107,6 +107,47 @@ def create_version_set(api_path):
         return False
 
 
+def update_api_version_info(api_id, api_version, version_set_id):
+    """Update API version information using direct REST API call."""
+    logger.info(f"Updating version info for {api_id} using REST API...")
+    
+    # Get access token
+    token = get_access_token()
+    
+    # Get current API details first
+    url = f"https://management.azure.com/subscriptions/{SUBSCRIPTION_ID}/resourceGroups/{RESOURCE_GROUP}/providers/Microsoft.ApiManagement/service/{APIM_INSTANCE}/apis/{api_id}?api-version={AZURE_API_VERSION}"
+    
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    
+    # First get the current API to avoid overwriting existing settings
+    get_response = requests.get(url, headers=headers)
+    
+    if get_response.status_code != 200:
+        logger.error(f"Failed to get API details for {api_id}: {get_response.text}")
+        return False
+    
+    # Extract current properties
+    current_api = get_response.json()
+    
+    # Update with version info
+    update_data = current_api
+    update_data['properties']['apiVersion'] = api_version
+    update_data['properties']['apiVersionSetId'] = version_set_id
+    
+    # Update the API
+    update_response = requests.put(url, headers=headers, json=update_data)
+    
+    if update_response.status_code in (200, 201):
+        logger.info(f"Successfully updated version info for {api_id}")
+        return True
+    else:
+        logger.error(f"Failed to update version info for {api_id}: {update_response.text}")
+        return False
+
+
 def import_api(api_id, api_version, api_path, version_set_id, spec_path, result_file):
     """Import API with version set."""
     logger.info(f"Importing API {api_id} with version {api_version}...")
@@ -137,24 +178,11 @@ def import_api(api_id, api_version, api_path, version_set_id, spec_path, result_
             success = True
             logger.info(f"Successfully imported {api_id}")
             
-            # Set API version and version set
-            update_cmd = (
-                f"az apim api update "
-                f"--resource-group \"{RESOURCE_GROUP}\" "
-                f"--service-name \"{APIM_INSTANCE}\" "
-                f"--api-id \"{api_id}\" "
-                f"--api-version \"{api_version}\" "
-                f"--api-version-set-id \"{version_set_id}\""
-            )
-            
-            update_result = run_command(update_cmd)
-            
-            if update_result.returncode == 0:
-                logger.info(f"Successfully updated version info for {api_id}")
+            # Set API version and version set using REST API
+            if update_api_version_info(api_id, api_version, version_set_id):
                 with open(result_file, 'a') as f:
                     f.write(json.dumps({api_id: 200}) + "\n")
             else:
-                logger.error(f"Failed to update version info for {api_id}: {update_result.stderr}")
                 with open(result_file, 'a') as f:
                     f.write(json.dumps({api_id: 500}) + "\n")
         else:
