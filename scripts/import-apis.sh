@@ -33,13 +33,8 @@ create_version_set() {
   local api_path=$1
   
   echo "Creating version set for $api_path..."
-  az apim api versionset create \
-    --resource-group "$RESOURCE_GROUP" \
-    --service-name "$APIM_INSTANCE" \
-    --version-set-id "$api_path" \
-    --display-name "$api_path" \
-    --versioning-scheme header \
-    --version-header-name "X-API-VERSION"
+  # Using a single line command to avoid any issues with line continuations
+  az apim api versionset create --resource-group "$RESOURCE_GROUP" --service-name "$APIM_INSTANCE" --version-set-id "$api_path" --display-name "$api_path" --versioning-scheme "header" --version-header-name "X-API-VERSION"
   
   if [ $? -eq 0 ]; then
     echo "Successfully created version set for $api_path"
