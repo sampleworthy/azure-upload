@@ -126,7 +126,7 @@ def import_api(api_id, api_version, api_path, version_set_id, spec_path, client,
             success = True
             logger.info(f"Successfully imported {api_id}")
             
-            # Update API with version info using SDK
+            # Update API with version info using SDK - First get current API
             try:
                 # Get current API
                 current_api = client.api.get(
@@ -134,6 +134,9 @@ def import_api(api_id, api_version, api_path, version_set_id, spec_path, client,
                     service_name=APIM_INSTANCE,
                     api_id=api_id
                 )
+                
+                # Get the ETag value
+                etag = current_api.etag
                 
                 # Prepare update parameters
                 update_params = {
@@ -145,12 +148,13 @@ def import_api(api_id, api_version, api_path, version_set_id, spec_path, client,
                     "protocols": current_api.protocols
                 }
                 
-                # Update API
+                # Update API with if_match parameter
                 client.api.update(
                     resource_group_name=RESOURCE_GROUP,
                     service_name=APIM_INSTANCE,
                     api_id=api_id,
-                    parameters=update_params
+                    parameters=update_params,
+                    if_match=etag
                 )
                 
                 logger.info(f"Successfully updated version info for {api_id}")
@@ -158,8 +162,60 @@ def import_api(api_id, api_version, api_path, version_set_id, spec_path, client,
                     f.write(json.dumps({api_id: 200}) + "\n")
             except Exception as e:
                 logger.error(f"Failed to update version info for {api_id}: {str(e)}")
-                with open(result_file, 'a') as f:
-                    f.write(json.dumps({api_id: 500}) + "\n")
+                
+                # Attempt a different approach using direct REST API if SDK fails
+                try:
+                    logger.info(f"Trying alternate approach for updating {api_id}")
+                    
+                    # Get access token from CLI for direct REST call
+                    token_cmd = "az account get-access-token --resource=https://management.azure.com/ --query accessToken -o tsv"
+                    token_result = run_command(token_cmd)
+                    
+                    if token_result.returncode == 0:
+                        token = token_result.stdout.strip()
+                        
+                        # Create REST API call to update the API
+                        import requests
+                        
+                        url = f"https://management.azure.com/subscriptions/{SUBSCRIPTION_ID}/resourceGroups/{RESOURCE_GROUP}/providers/Microsoft.ApiManagement/service/{APIM_INSTANCE}/apis/{api_id}?api-version=2021-08-01"
+                        
+                        headers = {
+                            "Authorization": f"Bearer {token}",
+                            "Content-Type": "application/json",
+                            "If-Match": etag
+                        }
+                        
+                        # Prepare data based on current API properties
+                        data = {
+                            "properties": {
+                                "displayName": current_api.display_name,
+                                "apiRevision": current_api.api_revision,
+                                "serviceUrl": current_api.service_url,
+                                "path": current_api.path,
+                                "protocols": current_api.protocols,
+                                "apiVersion": api_version,
+                                "apiVersionSetId": version_set_id
+                            }
+                        }
+                        
+                        response = requests.patch(url, headers=headers, json=data)
+                        
+                        if response.status_code in (200, 201, 204):
+                            logger.info(f"Successfully updated version info for {api_id} using REST API")
+                            with open(result_file, 'a') as f:
+                                f.write(json.dumps({api_id: 200}) + "\n")
+                        else:
+                            logger.error(f"Failed to update version info for {api_id} using REST API: {response.text}")
+                            with open(result_file, 'a') as f:
+                                f.write(json.dumps({api_id: 500}) + "\n")
+                    else:
+                        logger.error(f"Failed to get token for REST API call: {token_result.stderr}")
+                        with open(result_file, 'a') as f:
+                            f.write(json.dumps({api_id: 500}) + "\n")
+                except Exception as e2:
+                    logger.error(f"Failed in alternate update approach for {api_id}: {str(e2)}")
+                    with open(result_file, 'a') as f:
+                        f.write(json.dumps({api_id: 500}) + "\n")
         else:
             retry_count += 1
             if retry_count < MAX_RETRIES:
