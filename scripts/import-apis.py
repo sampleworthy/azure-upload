@@ -6,6 +6,7 @@ import tempfile
 import subprocess
 import time
 import yaml
+import requests
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 import logging
@@ -27,6 +28,9 @@ MAX_RETRIES = 3
 # Check if we need to run for all APIs or just changed APIs
 MODE = os.environ.get("MODE", "all")  # Default to 'all' if not specified
 
+# Azure API version
+AZURE_API_VERSION = "2021-08-01"
+
 
 def run_command(cmd, capture_output=True):
     """Run a shell command and return the result."""
@@ -45,6 +49,17 @@ def run_command(cmd, capture_output=True):
         raise
 
 
+def get_access_token():
+    """Get Azure access token using CLI."""
+    cmd = "az account get-access-token --resource=https://management.azure.com/ --query accessToken -o tsv"
+    result = run_command(cmd)
+    if result.returncode == 0:
+        return result.stdout.strip()
+    else:
+        logger.error(f"Failed to get access token: {result.stderr}")
+        sys.exit(1)
+
+
 def check_version_set(api_path):
     """Check if version set exists."""
     logger.info(f"Checking if version set exists for {api_path}...")
@@ -60,38 +75,35 @@ def check_version_set(api_path):
 
 
 def create_version_set(api_path):
-    """Create API version set."""
-    logger.info(f"Creating version set for {api_path}...")
+    """Create API version set using direct REST API call."""
+    logger.info(f"Creating version set for {api_path} using REST API...")
     
-    # Try a different way of formatting the command
-    # Use the array form of subprocess to avoid shell quoting issues
-    args = [
-        "az", "apim", "api", "versionset", "create",
-        "--resource-group", RESOURCE_GROUP,
-        "--service-name", APIM_INSTANCE,
-        "--version-set-id", api_path,
-        "--display-name", api_path,
-        "--versioning-scheme", "header",
-        "--version-header-name", "X-API-VERSION"
-    ]
+    # Get access token
+    token = get_access_token()
     
-    try:
-        logger.info(f"Running command: {' '.join(args)}")
-        result = subprocess.run(
-            args,
-            check=False,
-            text=True,
-            capture_output=True
-        )
-        
-        if result.returncode == 0:
-            logger.info(f"Successfully created version set for {api_path}")
-            return True
-        else:
-            logger.error(f"Failed to create version set for {api_path}: {result.stderr}")
-            return False
-    except Exception as e:
-        logger.error(f"Exception creating version set: {e}")
+    # Create version set using REST API
+    url = f"https://management.azure.com/subscriptions/{SUBSCRIPTION_ID}/resourceGroups/{RESOURCE_GROUP}/providers/Microsoft.ApiManagement/service/{APIM_INSTANCE}/apiVersionSets/{api_path}?api-version={AZURE_API_VERSION}"
+    
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    
+    data = {
+        "properties": {
+            "displayName": api_path,
+            "versioningScheme": "Header",
+            "versionHeaderName": "X-API-VERSION"
+        }
+    }
+    
+    response = requests.put(url, headers=headers, json=data)
+    
+    if response.status_code in (200, 201):
+        logger.info(f"Successfully created version set for {api_path}")
+        return True
+    else:
+        logger.error(f"Failed to create version set for {api_path}: {response.text}")
         return False
 
 
